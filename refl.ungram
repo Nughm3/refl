@@ -1,0 +1,109 @@
+Program = Item*
+
+Item = 
+  StructDef
+| EnumDef
+| Function
+
+StructDef = 'struct' name:'ident' body:StructBody
+
+StructBody =  '{' fields:( field:Param ','? )* '}'
+
+EnumDef = 'enum' name:'ident' '{' variants:( variant:( name:'ident' body:StructBody? ) ','? )* '}'
+
+Function = 'fn' name:'ident' '(' params:( Param ','? )* ')' ( ':' return_ty:Type )? body:Block
+
+Param = name:'ident' ':' ty:Type
+
+Type =
+  'int_type'
+| 'float_type'
+| 'bool_type'
+| 'char_type'
+| 'string_type'
+| FunctionType
+| ArrayType
+| PtrType
+| CustomType
+
+FunctionType = 'fn' '(' params:( Param ','? )* ')'
+
+ArrayType = '[' ty:Type ']'
+
+PtrType = '&' ty:Type
+
+CustomType = name:'ident'
+
+Block = '{' Stmt* '}'
+
+Stmt =
+  ';'
+| ExprStmt
+| LetStmt
+| IfStmt
+| ForStmt
+| WhileStmt
+| BreakStmt
+| ContinueStmt
+| ReturnStmt
+| Item
+
+ExprStmt = Expr ';'
+
+LetStmt = 'let' ( ':' ty:Type )? '=' value:Expr ';'
+
+IfStmt = 'if' condition:Expr then_branch:Block ( 'else' else_branch:ElseStmt )?
+
+ElseStmt = IfStmt | Block
+
+ForStmt = 'for' binding:'ident' 'in' iterator:Expr body:Block
+
+WhileStmt = 'while' condition:Expr body:Block
+
+BreakStmt = 'break' ';'
+
+ContinueStmt = 'continue' ';'
+
+ReturnStmt = 'return' value:Expr? ';'
+
+Expr =
+  LiteralExpr
+| InfixExpr
+| PrefixExpr
+| ParenExpr
+| CallExpr
+| ArrayExpr
+| IndexExpr
+| StructExpr
+
+LiteralExpr =
+  'int'
+| 'float'
+| 'true'
+| 'false'
+| 'char'
+| 'string'
+| 'ident'
+
+InfixExpr = lhs:Expr op:InfixOp rhs:Expr
+
+InfixOp = 
+  '+' | '-' | '*' | '/' | '%'
+| '==' | '!='
+| '<' | '<=' | '>' | '>='
+| '&&' | '||'
+| '=' | '+=' | '-=' | '*=' | '/=' | '%='
+
+PrefixExpr = op:PrefixOp child:Expr
+
+PrefixOp = '+' | '-' | '!' | '&' | '*'
+
+ParenExpr = '(' child:Expr ')'
+
+CallExpr = child:Expr '(' args:( arg:Expr ','? )* ')'
+
+ArrayExpr = '[' values:( value:Expr ','? )* ']'
+
+IndexExpr = array:Expr '[' index:Expr ']'
+
+StructExpr = name:'ident' '{' fields:( field:( name:'ident' ':' value:Expr ) ','? )* '}'

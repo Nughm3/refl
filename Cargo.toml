@@ -1,0 +1,15 @@
+[package]
+name = "refl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cstree = { version = "0.12.0-rc.0", features = ["derive"] }
+logos = "0.13.0"
+text-size = "1.1.0"
+
+[build-dependencies]
+prettyplease = "0.2.4"
+quote = "1.0.26"
+syn = { version = "2", default-features = false, features = ["full", "parsing"] }
+ungrammar = "1.16.1"
