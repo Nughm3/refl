@@ -1,9 +1,6 @@
-use std::{
-    collections::HashMap,
-    env, fmt, fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, fs};
 
+use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use ungrammar::{Grammar, Node, Rule};
 
@@ -13,13 +10,27 @@ const OUTPUT_PATH: &str = "src/syntax/generated";
 fn main() {
     println!("cargo:rerun-if-changed={GRAMMAR_PATH}");
     let grammar: Grammar = fs::read_to_string(GRAMMAR_PATH).unwrap().parse().unwrap();
-    let out: PathBuf = format!("{}/{OUTPUT_PATH}", env::var("CARGO_MANIFEST_DIR").unwrap()).into();
-    Generator::new(&grammar).generate(&out);
+    let mut gen = Generator::new(&grammar);
+
+    write("kind.rs", gen.gen_kinds());
+    write("token.rs", gen.gen_tokens());
+    write("ast.rs", gen.gen_ast());
+}
+
+fn write(path: &str, tokens: TokenStream) {
+    let tokens = quote! {
+        #![allow(clippy::all)]
+        #tokens
+    };
+
+    let file = syn::parse2(tokens).unwrap();
+    let text = prettyplease::unparse(&file);
+    fs::write(format!("{OUTPUT_PATH}/{path}"), text).unwrap();
 }
 
 enum NodeType {
-    Enum,
     Struct,
+    Enum,
 }
 
 enum NodeData {
@@ -30,67 +41,60 @@ enum NodeData {
 struct Struct {
     name: String,
     fields: Vec<Field>,
-    type_cardinality: HashMap<String, Cardinality>,
+    type_repeat: HashMap<String, Repeat>,
 }
 
 impl Struct {
-    fn get_cardinality(&mut self, ty: &String, rule: &Rule, grammar: &Grammar) -> usize {
-        match self.type_cardinality.get_mut(ty) {
-            Some(Cardinality::One(x)) => {
-                *x += 1;
-                *x
+    fn get_repeat(&mut self, ty: &String, rule: &Rule) -> usize {
+        match self.type_repeat.get_mut(ty) {
+            Some(Repeat::One(n)) => {
+                *n += 1;
+                *n
             }
-            Some(Cardinality::Many) => panic!(
-                "rule `{}` imports type `{}` which was already used before",
-                format_rule(rule, grammar),
-                ty
-            ),
+            Some(Repeat::Many) => {
+                panic!("rule '{rule:?}' uses type '{ty}' which was already used before",)
+            }
             None => {
-                self.type_cardinality
-                    .insert(ty.clone(), Cardinality::One(0));
+                self.type_repeat.insert(ty.clone(), Repeat::One(0));
                 0
             }
         }
     }
 
-    fn use_many_cardinality(&mut self, ty: &str, r: &Rule, grammar: &Grammar) {
-        if self.type_cardinality.contains_key(ty) {
-            panic!(
-                "rule `{}` imports type `{}` which was already used before",
-                format_rule(r, grammar),
-                ty
-            );
+    fn check_repeat(&mut self, ty: &str, r: &Rule) {
+        if self.type_repeat.contains_key(ty) {
+            panic!("rule '{r:?}' uses type '{ty}' which was already used before",);
         }
     }
 }
 
-enum Field {
-    Token {
-        name: String,
-        ty: String,
-        cardinality: Cardinality,
-    },
-    Node {
-        name: String,
-        ty: String,
-        cardinality: Cardinality,
-    },
+struct Field {
+    kind: FieldKind,
+    name: String,
+    ty: String,
+    repeat: Repeat,
 }
 
-enum Cardinality {
+enum FieldKind {
+    Node,
+    Token,
+    Hidden,
+}
+
+enum Repeat {
     One(usize),
     Many,
+}
+
+struct Enum {
+    name: String,
+    nodes: Vec<Variant>,
+    tokens: Vec<String>,
 }
 
 struct Variant {
     name: String,
     node: Node,
-}
-
-struct Enum {
-    name: String,
-    node_variants: Vec<Variant>,
-    token_variants: Vec<String>,
 }
 
 struct TokenData {
@@ -125,42 +129,20 @@ impl<'a> Generator<'a> {
         }
     }
 
-    fn generate(mut self, out: &Path) {
-        write(
-            out,
-            "kind.rs",
-            Some("use cstree::Syntax;\nuse logos::Logos;"),
-            self.gen_kinds(),
-        );
-
-        write(
-            out,
-            "token.rs",
-            Some("use crate::syntax::*;"),
-            self.gen_tokens(),
-        );
-
-        write(out, "ast.rs", Some("use crate::syntax::*;"), self.gen_ast());
-    }
-
-    fn gen_kinds(&mut self) -> String {
+    fn gen_kinds(&mut self) -> TokenStream {
         let token_data: Vec<_> = self
             .grammar
             .tokens()
-            .map(|n| map_token(&self.grammar[n].name))
+            .map(|n| token_map(&self.grammar[n].name))
             .collect();
 
         let tokens: Vec<_> = token_data
             .iter()
             .map(|data| {
-                let TokenData {
-                    expr, lex, regex, ..
-                } = data;
+                let ident = format_ident!("{}", data.expr);
+                let lex = data.lex.clone();
 
-                let ident = format_ident!("{expr}");
-                let lex = lex.clone();
-
-                if *regex {
+                if data.regex {
                     quote! {
                         #[regex(#lex)]
                         #ident
@@ -185,35 +167,20 @@ impl<'a> Generator<'a> {
 
         let nodes: Vec<_> = nodes.iter().map(|node| format_ident!("{node}")).collect();
 
-        let def = quote! {
-            #[repr(u32)]
-            #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Logos, Syntax)]
-            pub enum SyntaxKind {
-                // Terminal tokens
-                #(#tokens,)*
-
-                // Non-terminal nodes
-                #(#nodes,)*
-
-                // Misc
-                #[regex(r"[ \n\r\t]+")]
-                Whitespace,
-                #[regex("//.*")]
-                Comment,
-                Error,
-                #[doc(hidden)]
-                Eof,
-            }
-        };
-
         let token_display: Vec<_> = token_data
             .iter()
             .map(|data| {
                 let TokenData { expr, fmt, .. } = data;
                 let name = format_ident!("{expr}");
 
+                let fmt = if fmt == "{" || fmt == "}" {
+                    fmt.repeat(2)
+                } else {
+                    fmt.clone()
+                };
+
                 quote! {
-                    SyntaxKind::#name => write!(f, "{}", #fmt)
+                    SyntaxKind::#name => write!(f, #fmt)
                 }
             })
             .collect();
@@ -227,9 +194,29 @@ impl<'a> Generator<'a> {
             })
             .collect();
 
-        let display = quote! {
-            impl std::fmt::Display for SyntaxKind {
-                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        quote! {
+            use std::fmt;
+
+            use logos::Logos;
+            use cstree::Syntax;
+
+            #[repr(u32)]
+            #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Logos, Syntax)]
+            pub enum SyntaxKind {
+                #(#tokens,)*
+                #(#nodes,)*
+
+                #[regex(r"[ \n\r\t]+")]
+                Whitespace,
+                #[regex("//.*")]
+                Comment,
+                Error,
+                #[doc(hidden)]
+                Eof,
+            }
+
+            impl fmt::Display for SyntaxKind {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                     match self {
                         #(#token_display,)*
                         #(#nodes_display,)*
@@ -240,107 +227,136 @@ impl<'a> Generator<'a> {
                     }
                 }
             }
-        };
-
-        format!("{def}\n\n{display}")
+        }
     }
 
-    fn gen_tokens(&mut self) -> String {
-        self.grammar
-            .tokens()
-            .map(|node| {
-                {
-                    let ident = format_ident!("{}", map_token(&self.grammar[node].name).expr);
+    fn gen_tokens(&mut self) -> TokenStream {
+        let tokens = self.grammar.tokens().map(|token| {
+            let TokenData { expr, regex, .. } = token_map(&self.grammar[token].name);
 
-                    quote! {
-                        #[derive(Clone, PartialEq, Eq, Hash)]
-                        pub struct #ident(SyntaxToken);
+            let ident = format_ident!("{expr}");
 
-                        impl std::fmt::Debug for #ident {
-                            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                                std::fmt::Debug::fmt(&self.0, f)
-                            }
-                        }
-
-                        impl AstToken for #ident {}
-
-                        impl AstElement for #ident {
-                            fn can_cast(kind: SyntaxKind) -> bool {
-                                kind == SyntaxKind::#ident
-                            }
-
-                            fn cast(elem: SyntaxElement) -> Option<Self> {
-                                let tok = elem.into_token()?;
-                                Self::can_cast(tok.kind()).then(|| Self(tok))
-                            }
-
-                            fn span(&self) -> TextRange {
-                                self.0.text_range()
-                            }
-
-                            fn inner(self) -> SyntaxElement { self.0.into() }
+            let token_trait_impl = if regex {
+                quote! {
+                    impl AstToken for #ident {
+                        fn text_key(&self) -> TokenKey {
+                            self.0.text_key().unwrap()
                         }
                     }
                 }
-                .to_string()
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n")
+            } else {
+                quote!()
+            };
+
+            quote! {
+                #[derive(Clone, PartialEq, Eq, Hash)]
+                pub struct #ident(SyntaxToken);
+
+                impl fmt::Debug for #ident {
+                    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        fmt::Debug::fmt(&self.0, f)
+                    }
+                }
+
+                #token_trait_impl
+
+                impl AstElement for #ident {
+                    fn can_cast(kind: SyntaxKind) -> bool {
+                        kind == SyntaxKind::#ident
+                    }
+
+                    fn cast(elem: SyntaxElement) -> Option<Self> {
+                        let tok = elem.into_token()?;
+                        Self::can_cast(tok.kind()).then(|| Self(tok))
+                    }
+
+                    fn span(&self) -> Span {
+                        self.0.text_range().into()
+                    }
+                }
+            }
+        });
+
+        quote! {
+            use std::fmt;
+            use crate::syntax::*;
+
+            #(#tokens)*
+        }
     }
 
-    fn gen_ast(&mut self) -> String {
+    fn gen_ast(&mut self) -> TokenStream {
         let nodes = self.gen_nodes();
-        nodes
+        let nodes = nodes
 			.into_iter()
 			.map(|node| {
 				match node {
 					NodeData::Struct(s) => {
 						let name = format_ident!("{}", s.name);
-						let fields = s.fields.into_iter().map(|f| match f {
-							Field::Node { name, ty, cardinality } => {
-								let name = format_ident!("{}", name);
-								let ty = format_ident!("{}", ty);
-								match cardinality {
-									Cardinality::Many => quote! {
-										pub fn #name(&self) -> impl Iterator<Item = #ty> + '_ {
-											children(&self.0)
-										}
-									},
-									Cardinality::One(n) => quote! {
-										pub fn #name(&self) -> Option<#ty> {
-											children(&self.0).nth(#n)
-										}
-									},
-								}
-							},
-							Field::Token { name, ty, cardinality } => {
-								let name = format_ident!("{}", name);
-								let ty = format_ident!("{}", ty);
-								match cardinality {
-									Cardinality::Many => {
-										quote! {
-											pub fn #name(&self) -> impl Iterator<Item = #ty> + '_ {
-												children(&self.0)
-											}
-										}
-									},
-									Cardinality::One(n) => {
-										quote! {
-											pub fn #name(&self) -> Option<#ty> {
-												children(&self.0).nth(#n)
-											}
-										}
-									},
-								}
-							},
-						});
+						let fields = s.fields.into_iter().filter_map(|f|
+							match f.kind {
+                                FieldKind::Node => {
+        							let name = format_ident!("{}", f.name);
+        							let ty = format_ident!("{}", f.ty);
+
+    								Some(match f.repeat {
+    									Repeat::Many => quote! {
+    										pub fn #name(&self) -> impl Iterator<Item = #ty> + '_ {
+    											children(&self.0)
+    										}
+    									},
+    									Repeat::One(n) => {
+                                            let call = if n == 0 {
+    											quote!(children(&self.0).next())
+                                            } else {
+    											quote!(children(&self.0).nth(#n))
+                                            };
+
+                                            quote! {
+        										pub fn #name(&self) -> Option<#ty> {
+                                                    #call
+        										}
+        									}
+                                        },
+    								})
+    							},
+                                FieldKind::Token => {
+        							let name = format_ident!("{}", f.name);
+        							let ty = format_ident!("{}", f.ty);
+
+    								Some(match f.repeat {
+    									Repeat::Many => {
+    										quote! {
+    											pub fn #name(&self) -> impl Iterator<Item = #ty> + '_ {
+    												children(&self.0)
+    											}
+    										}
+    									},
+    									Repeat::One(n) => {
+                                            let call = if n == 0 {
+    											quote!(children(&self.0).next())
+                                            } else {
+    											quote!(children(&self.0).nth(#n))
+                                            };
+
+                                            quote! {
+        										pub fn #name(&self) -> Option<#ty> {
+                                                    #call
+        										}
+        									}
+    									},
+    								})
+                                }
+                                FieldKind::Hidden => None
+							}
+						);
 
 						quote! {
 							#[derive(Clone, PartialEq, Eq, Hash)]
 							pub struct #name(SyntaxNode);
 
-							impl std::fmt::Debug for #name {
-								fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { std::fmt::Debug::fmt(&self.0, f) }
+							impl fmt::Debug for #name {
+								fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { fmt::Debug::fmt(&self.0, f) }
 							}
 
 							impl AstNode for #name {}
@@ -355,11 +371,9 @@ impl<'a> Generator<'a> {
 									Self::can_cast(node.kind()).then(|| Self(node))
 								}
 
-								fn span(&self) -> TextRange {
-									self.0.text_range()
+								fn span(&self) -> Span {
+									self.0.text_range().into()
 								}
-
-								fn inner(self) -> SyntaxElement { self.0.into() }
 							}
 
 							impl #name {
@@ -369,15 +383,15 @@ impl<'a> Generator<'a> {
 					},
 					NodeData::Enum(e) => {
 						let name = format_ident!("{}", e.name);
-						let token_variants: Vec<_> = e.token_variants.iter().map(|variant| format_ident!("{variant}")).collect();
+						let token_variants: Vec<_> = e.tokens.iter().map(|variant| format_ident!("{variant}")).collect();
 
 						let node_variants: Vec<_> =
-							e.node_variants.iter().map(|variant| format_ident!("{}", variant.name)).collect();
+							e.nodes.iter().map(|variant| format_ident!("{}", variant.name)).collect();
 
 						let mut struct_variants = Vec::new();
 						let mut enum_variants = Vec::new();
 
-						for variant in e.node_variants {
+						for variant in e.nodes {
                             let name = format_ident!("{}", variant.name);
 							match self.node_types[&variant.node] {
 								NodeType::Struct => struct_variants.push(name),
@@ -386,21 +400,20 @@ impl<'a> Generator<'a> {
 						}
 
 						quote! {
+                            #[derive(Clone, Hash, PartialEq, Eq)]
 							pub enum #name {
 								#(#token_variants(#token_variants),)*
 								#(#node_variants(#node_variants),)*
 							}
 
-							impl std::fmt::Debug for #name {
-								fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+							impl fmt::Debug for #name {
+								fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 									match self {
-										#(Self::#token_variants(x) => std::fmt::Debug::fmt(x, f),)*
-										#(Self::#node_variants(x) => std::fmt::Debug::fmt(x, f),)*
+										#(Self::#token_variants(x) => fmt::Debug::fmt(x, f),)*
+										#(Self::#node_variants(x) => fmt::Debug::fmt(x, f),)*
 									}
 								}
 							}
-
-							impl AstNode for #name {}
 
 							impl AstElement for #name {
 								fn can_cast(kind: SyntaxKind) -> bool {
@@ -416,39 +429,48 @@ impl<'a> Generator<'a> {
 									} #(.or_else(|| AstElement::cast(elem.clone()).map(Self::#enum_variants)))*
 								}
 
-								fn span(&self) -> TextRange {
+								fn span(&self) -> Span {
 									match self {
 										#(Self::#token_variants(x) => x.span(),)*
 										#(Self::#node_variants(x) => x.span(),)*
-									}
-								}
-
-								fn inner(self) -> SyntaxElement {
-									match self {
-										#(Self::#token_variants(x) => x.inner(),)*
-										#(Self::#node_variants(x) => x.inner(),)*
 									}
 								}
 							}
 						}
 					},
 				}
-				.to_string()
-			})
-			.collect::<Vec<_>>().join("\n\n")
+			});
+
+        quote! {
+            use std::fmt;
+            use crate::syntax::*;
+
+            fn children<'a, T: 'a + AstElement>(
+                node: &'a SyntaxNode,
+            ) -> impl Iterator<Item = T> + 'a {
+                node.children_with_tokens()
+                    .map(|elem| match elem {
+                        SyntaxElementRef::Node(node) => SyntaxElement::Node(node.clone()),
+                        SyntaxElementRef::Token(token) => SyntaxElement::Token(token.clone()),
+                    })
+                    .filter_map(T::cast)
+            }
+
+            #(#nodes)*
+        }
     }
 
     fn gen_nodes(&mut self) -> Vec<NodeData> {
         self.grammar
             .iter()
-            .map(|x| {
-                let node = &self.grammar[x];
-                match self.node_types[&x] {
+            .map(|n| {
+                let node = &self.grammar[n];
+                match self.node_types[&n] {
                     NodeType::Struct => {
                         let mut s = Struct {
                             name: node.name.clone(),
                             fields: Vec::new(),
-                            type_cardinality: HashMap::new(),
+                            type_repeat: HashMap::new(),
                         };
 
                         self.lower_rule(&mut s, None, &node.rule);
@@ -472,23 +494,34 @@ impl<'a> Generator<'a> {
             Rule::Labeled { label, rule } => self.lower_rule(out, Some(label), rule),
             Rule::Node(node) => {
                 let ty = self.grammar[*node].name.clone();
-                let index = out.get_cardinality(&ty, rule, self.grammar);
+                let index = out.get_repeat(&ty, rule);
 
-                out.fields.push(Field::Node {
+                out.fields.push(Field {
+                    kind: FieldKind::Node,
                     name: label.cloned().unwrap_or_else(|| to_snake_case(&ty)),
                     ty,
-                    cardinality: Cardinality::One(index),
+                    repeat: Repeat::One(index),
                 });
             }
             Rule::Token(token) => {
                 let token = &self.grammar[*token].name;
-                let ty = map_token(token).expr;
-                let index = out.get_cardinality(&ty, rule, self.grammar);
+                let ty = token_map(token).expr;
+                let index = out.get_repeat(&ty, rule);
 
-                out.fields.push(Field::Token {
-                    name: label.cloned().unwrap_or_else(|| to_snake_case(&ty)),
-                    ty,
-                    cardinality: Cardinality::One(index),
+                out.fields.push(if let Some(label) = label {
+                    Field {
+                        kind: FieldKind::Token,
+                        name: label.clone(),
+                        ty,
+                        repeat: Repeat::One(index),
+                    }
+                } else {
+                    Field {
+                        kind: FieldKind::Hidden,
+                        name: String::new(),
+                        ty,
+                        repeat: Repeat::One(index),
+                    }
                 });
             }
             Rule::Seq(rules) => {
@@ -496,22 +529,20 @@ impl<'a> Generator<'a> {
                     self.lower_rule(out, label, rule);
                 }
             }
-            Rule::Alt(_) => panic!(
-                "'|' rule is not allowed here: {}",
-                format_rule(rule, self.grammar)
-            ),
+            Rule::Alt(_) => panic!("alternation rule is not allowed here: '{rule:?}'",),
             Rule::Opt(rule) => self.lower_rule(out, label, rule),
             Rule::Rep(rule) => {
-                if let Rule::Node(node) = &**rule {
+                if let Rule::Node(node) = rule.as_ref() {
                     let ty = self.grammar[*node].name.clone();
-                    out.use_many_cardinality(&ty, rule, self.grammar);
+                    out.check_repeat(&ty, rule);
 
-                    out.fields.push(Field::Node {
+                    out.fields.push(Field {
+                        kind: FieldKind::Node,
                         name: label
                             .cloned()
                             .unwrap_or_else(|| pluralize(&to_snake_case(&ty))),
                         ty,
-                        cardinality: Cardinality::Many,
+                        repeat: Repeat::Many,
                     });
                 }
             }
@@ -519,46 +550,51 @@ impl<'a> Generator<'a> {
     }
 
     fn lower_enum(&mut self, name: String, rule: &Rule) -> Enum {
-        let mut node_variants = Vec::new();
-        let mut token_variants = Vec::new();
+        let mut nodes = Vec::new();
+        let mut tokens = Vec::new();
 
-        let Rule::Alt(alts) = rule
-        else { panic!("expected a '|' rule, got {}", format_rule(rule, self.grammar)) };
+        let Rule::Alt(alts) = rule else {
+            panic!("expected an alternation rule, got '{rule:?}'",)
+        };
 
         for alt in alts {
             match alt {
                 Rule::Node(node) => {
                     let data = &self.grammar[*node];
-                    node_variants.push(Variant {
+                    nodes.push(Variant {
                         name: data.name.clone(),
                         node: *node,
                     });
                 }
                 Rule::Token(token) => {
-                    let token = map_token(&self.grammar[*token].name).expr;
-                    token_variants.push(token);
+                    let token = token_map(&self.grammar[*token].name).expr;
+                    tokens.push(token);
                 }
-                _ => panic!(
-                    "expected node or token, got {}",
-                    format_rule(rule, self.grammar)
-                ),
+                _ => panic!("expected node or token, got {rule:?}",),
             }
         }
 
         Enum {
             name,
-            node_variants,
-            token_variants,
+            nodes,
+            tokens,
         }
     }
 
     // (T (',' T)* ','?)
     fn lower_comma_list(&mut self, out: &mut Struct, label: Option<&String>, r: &Rule) -> bool {
-        let Rule::Seq(rule) = r else { return false; };
+        let Rule::Seq(rule) = r else {
+            return false;
+        };
 
-        let [Rule::Node(node), Rule::Rep(repeat), Rule::Opt(trailing_comma)] = rule.as_slice() else { return false; };
+        let [Rule::Node(node), Rule::Rep(repeat), Rule::Opt(trailing_comma)] = rule.as_slice()
+        else {
+            return false;
+        };
 
-        let Rule::Seq(repeat) = repeat.as_ref() else { return false; };
+        let Rule::Seq(repeat) = repeat.as_ref() else {
+            return false;
+        };
 
         match repeat.as_slice() {
             [comma, Rule::Node(n)] if comma == trailing_comma.as_ref() && n == node => {}
@@ -570,11 +606,12 @@ impl<'a> Generator<'a> {
             .cloned()
             .unwrap_or_else(|| pluralize(&to_snake_case(&ty)));
 
-        out.use_many_cardinality(&ty, r, self.grammar);
-        out.fields.push(Field::Node {
+        out.check_repeat(&ty, r);
+        out.fields.push(Field {
+            kind: FieldKind::Node,
             name,
             ty,
-            cardinality: Cardinality::Many,
+            repeat: Repeat::Many,
         });
 
         true
@@ -607,7 +644,6 @@ fn to_snake_case(x: &str) -> String {
     if RUST_KEYWORDS.contains(&s.as_str()) {
         s.push('_');
     }
-
     s
 }
 
@@ -621,64 +657,7 @@ fn pluralize(x: &str) -> String {
     s
 }
 
-fn write(out: &Path, file: &str, imports: Option<&str>, content: String) {
-    let mut text = String::from("#![allow(clippy::all)]\n\n");
-
-    if let Some(imports) = imports {
-        text.push_str(imports);
-        text.push_str("\n\n");
-    }
-
-    text.push_str(&content);
-
-    let tree = syn::parse_file(&text).unwrap();
-    let text = prettyplease::unparse(&tree);
-
-    fs::write(out.join(file), text).unwrap();
-}
-
-fn format_rule<'a>(rule: &'a Rule, grammar: &'a Grammar) -> impl fmt::Display + 'a {
-    struct Fmt<'a> {
-        rule: &'a Rule,
-        grammar: &'a Grammar,
-    }
-
-    impl fmt::Display for Fmt<'_> {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self.rule {
-                Rule::Labeled { label, rule } => {
-                    write!(f, "{}:{}", label, format_rule(rule, self.grammar))
-                }
-                Rule::Node(node) => write!(f, "{}", self.grammar[*node].name),
-                Rule::Token(tok) => write!(f, "'{}'", self.grammar[*tok].name),
-                Rule::Seq(seq) => {
-                    write!(f, "(")?;
-                    for rule in seq {
-                        write!(f, "{} ", format_rule(rule, self.grammar))?;
-                    }
-                    write!(f, ")")
-                }
-                Rule::Alt(opts) => {
-                    write!(f, "(")?;
-                    for rule in opts {
-                        write!(f, "{} | ", format_rule(rule, self.grammar))?;
-                    }
-                    write!(f, ")")
-                }
-                Rule::Opt(v) => {
-                    write!(f, "{}?", format_rule(v, self.grammar))
-                }
-                Rule::Rep(v) => {
-                    write!(f, "{}*", format_rule(v, self.grammar))
-                }
-            }
-        }
-    }
-
-    Fmt { rule, grammar }
-}
-
-fn map_token(token: &str) -> TokenData {
+fn token_map(token: &str) -> TokenData {
     macro_rules! T {
         ($fmt:expr, $expr:expr) => {
             TokenData {
@@ -741,6 +720,7 @@ fn map_token(token: &str) -> TokenData {
         ";" => T!(";", "Semicolon"),
         "." => T!(".", "Dot"),
         "," => T!(",", "Comma"),
+        "->" => T!("->", "Arrow"),
         // Keywords
         "struct" => T!("struct", "Struct"),
         "enum" => T!("enum", "Enum"),
@@ -754,12 +734,6 @@ fn map_token(token: &str) -> TokenData {
         "break" => T!("break", "Break"),
         "continue" => T!("continue", "Continue"),
         "return" => T!("return", "Return"),
-        // Primitive types
-        "int_type" => T!("int", "IntType"),
-        "float_type" => T!("float", "FloatType"),
-        "bool_type" => T!("bool", "BoolType"),
-        "char_type" => T!("char", "CharType"),
-        "string_type" => T!("string", "StringType"),
         // Literals
         "true" => T!("true", "True"),
         "false" => T!("false", "False"),

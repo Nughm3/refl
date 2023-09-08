@@ -1,5 +1,8 @@
+pub use cstree::interning::TokenKey;
 pub use generated::*;
 pub use text_size::TextRange;
+
+use crate::span::Span;
 
 mod generated;
 
@@ -15,24 +18,14 @@ pub type ResolvedElement = cstree::syntax::ResolvedElement<SyntaxKind>;
 
 pub trait AstNode: AstElement {}
 
-pub trait AstToken: AstElement {}
+pub trait AstToken: AstElement {
+    fn text_key(&self) -> TokenKey;
+}
 
 pub trait AstElement: Sized {
     fn can_cast(kind: SyntaxKind) -> bool;
     fn cast(elem: SyntaxElement) -> Option<Self>
     where
         Self: Sized;
-    fn span(&self) -> TextRange;
-    fn inner(self) -> SyntaxElement;
-}
-
-pub(crate) fn children<'a, T: 'a + AstElement>(
-    node: &'a SyntaxNode,
-) -> impl Iterator<Item = T> + 'a {
-    node.children_with_tokens()
-        .map(|x| match x {
-            SyntaxElementRef::Node(node) => SyntaxElement::Node(node.clone()),
-            SyntaxElementRef::Token(token) => SyntaxElement::Token(token.clone()),
-        })
-        .filter_map(T::cast)
+    fn span(&self) -> Span;
 }

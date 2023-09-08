@@ -1,10 +1,21 @@
 #![allow(clippy::all)]
+use std::fmt;
 use crate::syntax::*;
+fn children<'a, T: 'a + AstElement>(
+    node: &'a SyntaxNode,
+) -> impl Iterator<Item = T> + 'a {
+    node.children_with_tokens()
+        .map(|elem| match elem {
+            SyntaxElementRef::Node(node) => SyntaxElement::Node(node.clone()),
+            SyntaxElementRef::Token(token) => SyntaxElement::Token(token.clone()),
+        })
+        .filter_map(T::cast)
+}
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Program(SyntaxNode);
-impl std::fmt::Debug for Program {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for Program {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for Program {}
@@ -16,11 +27,8 @@ impl AstElement for Program {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl Program {
@@ -28,55 +36,50 @@ impl Program {
         children(&self.0)
     }
 }
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Item {
     StructDef(StructDef),
     EnumDef(EnumDef),
-    Function(Function),
+    FunctionDef(FunctionDef),
 }
-impl std::fmt::Debug for Item {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Item {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::StructDef(x) => std::fmt::Debug::fmt(x, f),
-            Self::EnumDef(x) => std::fmt::Debug::fmt(x, f),
-            Self::Function(x) => std::fmt::Debug::fmt(x, f),
+            Self::StructDef(x) => fmt::Debug::fmt(x, f),
+            Self::EnumDef(x) => fmt::Debug::fmt(x, f),
+            Self::FunctionDef(x) => fmt::Debug::fmt(x, f),
         }
     }
 }
-impl AstNode for Item {}
 impl AstElement for Item {
     fn can_cast(kind: SyntaxKind) -> bool {
         matches!(
-            kind, | SyntaxKind::StructDef | SyntaxKind::EnumDef | SyntaxKind::Function
+            kind, | SyntaxKind::StructDef | SyntaxKind::EnumDef | SyntaxKind::FunctionDef
         )
     }
     fn cast(elem: SyntaxElement) -> Option<Self> {
         match elem.kind() {
             SyntaxKind::StructDef => AstElement::cast(elem.clone()).map(Self::StructDef),
             SyntaxKind::EnumDef => AstElement::cast(elem.clone()).map(Self::EnumDef),
-            SyntaxKind::Function => AstElement::cast(elem.clone()).map(Self::Function),
+            SyntaxKind::FunctionDef => {
+                AstElement::cast(elem.clone()).map(Self::FunctionDef)
+            }
             _ => None,
         }
     }
-    fn span(&self) -> TextRange {
+    fn span(&self) -> Span {
         match self {
             Self::StructDef(x) => x.span(),
             Self::EnumDef(x) => x.span(),
-            Self::Function(x) => x.span(),
-        }
-    }
-    fn inner(self) -> SyntaxElement {
-        match self {
-            Self::StructDef(x) => x.inner(),
-            Self::EnumDef(x) => x.inner(),
-            Self::Function(x) => x.inner(),
+            Self::FunctionDef(x) => x.span(),
         }
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct StructDef(SyntaxNode);
-impl std::fmt::Debug for StructDef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for StructDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for StructDef {}
@@ -88,29 +91,23 @@ impl AstElement for StructDef {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl StructDef {
-    pub fn struct_(&self) -> Option<Struct> {
-        children(&self.0).nth(0usize)
-    }
     pub fn name(&self) -> Option<Ident> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
-    pub fn body(&self) -> Option<StructBody> {
-        children(&self.0).nth(0usize)
+    pub fn body(&self) -> Option<Record> {
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct EnumDef(SyntaxNode);
-impl std::fmt::Debug for EnumDef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for EnumDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for EnumDef {}
@@ -122,109 +119,72 @@ impl AstElement for EnumDef {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl EnumDef {
-    pub fn enum_(&self) -> Option<Enum> {
-        children(&self.0).nth(0usize)
-    }
     pub fn name(&self) -> Option<Ident> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn left_brace(&self) -> Option<LeftBrace> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn right_brace(&self) -> Option<RightBrace> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct Function(SyntaxNode);
-impl std::fmt::Debug for Function {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+pub struct FunctionDef(SyntaxNode);
+impl fmt::Debug for FunctionDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
-impl AstNode for Function {}
-impl AstElement for Function {
+impl AstNode for FunctionDef {}
+impl AstElement for FunctionDef {
     fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::Function
+        kind == SyntaxKind::FunctionDef
     }
     fn cast(elem: SyntaxElement) -> Option<Self> {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
-impl Function {
-    pub fn fn_(&self) -> Option<Fn> {
-        children(&self.0).nth(0usize)
-    }
+impl FunctionDef {
     pub fn name(&self) -> Option<Ident> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn left_paren(&self) -> Option<LeftParen> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn right_paren(&self) -> Option<RightParen> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn colon(&self) -> Option<Colon> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
     pub fn return_ty(&self) -> Option<Type> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
     pub fn body(&self) -> Option<Block> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct StructBody(SyntaxNode);
-impl std::fmt::Debug for StructBody {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+pub struct Record(SyntaxNode);
+impl fmt::Debug for Record {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
-impl AstNode for StructBody {}
-impl AstElement for StructBody {
+impl AstNode for Record {}
+impl AstElement for Record {
     fn can_cast(kind: SyntaxKind) -> bool {
-        kind == SyntaxKind::StructBody
+        kind == SyntaxKind::Record
     }
     fn cast(elem: SyntaxElement) -> Option<Self> {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
-impl StructBody {
-    pub fn left_brace(&self) -> Option<LeftBrace> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn right_brace(&self) -> Option<RightBrace> {
-        children(&self.0).nth(0usize)
-    }
-}
+impl Record {}
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Param(SyntaxNode);
-impl std::fmt::Debug for Param {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for Param {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for Param {}
@@ -236,57 +196,40 @@ impl AstElement for Param {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl Param {
     pub fn name(&self) -> Option<Ident> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn colon(&self) -> Option<Colon> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
     pub fn ty(&self) -> Option<Type> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Type {
-    IntType(IntType),
-    FloatType(FloatType),
-    BoolType(BoolType),
-    CharType(CharType),
-    StringType(StringType),
     FunctionType(FunctionType),
     ArrayType(ArrayType),
     PtrType(PtrType),
     CustomType(CustomType),
 }
-impl std::fmt::Debug for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::IntType(x) => std::fmt::Debug::fmt(x, f),
-            Self::FloatType(x) => std::fmt::Debug::fmt(x, f),
-            Self::BoolType(x) => std::fmt::Debug::fmt(x, f),
-            Self::CharType(x) => std::fmt::Debug::fmt(x, f),
-            Self::StringType(x) => std::fmt::Debug::fmt(x, f),
-            Self::FunctionType(x) => std::fmt::Debug::fmt(x, f),
-            Self::ArrayType(x) => std::fmt::Debug::fmt(x, f),
-            Self::PtrType(x) => std::fmt::Debug::fmt(x, f),
-            Self::CustomType(x) => std::fmt::Debug::fmt(x, f),
+            Self::FunctionType(x) => fmt::Debug::fmt(x, f),
+            Self::ArrayType(x) => fmt::Debug::fmt(x, f),
+            Self::PtrType(x) => fmt::Debug::fmt(x, f),
+            Self::CustomType(x) => fmt::Debug::fmt(x, f),
         }
     }
 }
-impl AstNode for Type {}
 impl AstElement for Type {
     fn can_cast(kind: SyntaxKind) -> bool {
         matches!(
-            kind, | SyntaxKind::IntType | SyntaxKind::FloatType | SyntaxKind::BoolType |
-            SyntaxKind::CharType | SyntaxKind::StringType | SyntaxKind::FunctionType |
-            SyntaxKind::ArrayType | SyntaxKind::PtrType | SyntaxKind::CustomType
+            kind, | SyntaxKind::FunctionType | SyntaxKind::ArrayType |
+            SyntaxKind::PtrType | SyntaxKind::CustomType
         )
     }
     fn cast(elem: SyntaxElement) -> Option<Self> {
@@ -299,48 +242,23 @@ impl AstElement for Type {
             SyntaxKind::CustomType => {
                 AstElement::cast(elem.clone()).map(Self::CustomType)
             }
-            SyntaxKind::IntType => AstElement::cast(elem.clone()).map(Self::IntType),
-            SyntaxKind::FloatType => AstElement::cast(elem.clone()).map(Self::FloatType),
-            SyntaxKind::BoolType => AstElement::cast(elem.clone()).map(Self::BoolType),
-            SyntaxKind::CharType => AstElement::cast(elem.clone()).map(Self::CharType),
-            SyntaxKind::StringType => {
-                AstElement::cast(elem.clone()).map(Self::StringType)
-            }
             _ => None,
         }
     }
-    fn span(&self) -> TextRange {
+    fn span(&self) -> Span {
         match self {
-            Self::IntType(x) => x.span(),
-            Self::FloatType(x) => x.span(),
-            Self::BoolType(x) => x.span(),
-            Self::CharType(x) => x.span(),
-            Self::StringType(x) => x.span(),
             Self::FunctionType(x) => x.span(),
             Self::ArrayType(x) => x.span(),
             Self::PtrType(x) => x.span(),
             Self::CustomType(x) => x.span(),
         }
     }
-    fn inner(self) -> SyntaxElement {
-        match self {
-            Self::IntType(x) => x.inner(),
-            Self::FloatType(x) => x.inner(),
-            Self::BoolType(x) => x.inner(),
-            Self::CharType(x) => x.inner(),
-            Self::StringType(x) => x.inner(),
-            Self::FunctionType(x) => x.inner(),
-            Self::ArrayType(x) => x.inner(),
-            Self::PtrType(x) => x.inner(),
-            Self::CustomType(x) => x.inner(),
-        }
-    }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Block(SyntaxNode);
-impl std::fmt::Debug for Block {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for Block {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for Block {}
@@ -352,29 +270,20 @@ impl AstElement for Block {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl Block {
-    pub fn left_brace(&self) -> Option<LeftBrace> {
-        children(&self.0).nth(0usize)
-    }
     pub fn stmts(&self) -> impl Iterator<Item = Stmt> + '_ {
         children(&self.0)
-    }
-    pub fn right_brace(&self) -> Option<RightBrace> {
-        children(&self.0).nth(0usize)
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct FunctionType(SyntaxNode);
-impl std::fmt::Debug for FunctionType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for FunctionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for FunctionType {}
@@ -386,29 +295,20 @@ impl AstElement for FunctionType {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl FunctionType {
-    pub fn fn_(&self) -> Option<Fn> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn left_paren(&self) -> Option<LeftParen> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn right_paren(&self) -> Option<RightParen> {
-        children(&self.0).nth(0usize)
+    pub fn return_ty(&self) -> Option<Type> {
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ArrayType(SyntaxNode);
-impl std::fmt::Debug for ArrayType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for ArrayType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for ArrayType {}
@@ -420,29 +320,20 @@ impl AstElement for ArrayType {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl ArrayType {
-    pub fn left_bracket(&self) -> Option<LeftBracket> {
-        children(&self.0).nth(0usize)
-    }
     pub fn ty(&self) -> Option<Type> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn right_bracket(&self) -> Option<RightBracket> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct PtrType(SyntaxNode);
-impl std::fmt::Debug for PtrType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for PtrType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for PtrType {}
@@ -454,26 +345,20 @@ impl AstElement for PtrType {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl PtrType {
-    pub fn ampersand(&self) -> Option<Ampersand> {
-        children(&self.0).nth(0usize)
-    }
     pub fn ty(&self) -> Option<Type> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CustomType(SyntaxNode);
-impl std::fmt::Debug for CustomType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for CustomType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for CustomType {}
@@ -485,18 +370,16 @@ impl AstElement for CustomType {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl CustomType {
     pub fn name(&self) -> Option<Ident> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Stmt {
     Semicolon(Semicolon),
     ExprStmt(ExprStmt),
@@ -509,23 +392,22 @@ pub enum Stmt {
     ReturnStmt(ReturnStmt),
     Item(Item),
 }
-impl std::fmt::Debug for Stmt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Stmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Semicolon(x) => std::fmt::Debug::fmt(x, f),
-            Self::ExprStmt(x) => std::fmt::Debug::fmt(x, f),
-            Self::LetStmt(x) => std::fmt::Debug::fmt(x, f),
-            Self::IfStmt(x) => std::fmt::Debug::fmt(x, f),
-            Self::ForStmt(x) => std::fmt::Debug::fmt(x, f),
-            Self::WhileStmt(x) => std::fmt::Debug::fmt(x, f),
-            Self::BreakStmt(x) => std::fmt::Debug::fmt(x, f),
-            Self::ContinueStmt(x) => std::fmt::Debug::fmt(x, f),
-            Self::ReturnStmt(x) => std::fmt::Debug::fmt(x, f),
-            Self::Item(x) => std::fmt::Debug::fmt(x, f),
+            Self::Semicolon(x) => fmt::Debug::fmt(x, f),
+            Self::ExprStmt(x) => fmt::Debug::fmt(x, f),
+            Self::LetStmt(x) => fmt::Debug::fmt(x, f),
+            Self::IfStmt(x) => fmt::Debug::fmt(x, f),
+            Self::ForStmt(x) => fmt::Debug::fmt(x, f),
+            Self::WhileStmt(x) => fmt::Debug::fmt(x, f),
+            Self::BreakStmt(x) => fmt::Debug::fmt(x, f),
+            Self::ContinueStmt(x) => fmt::Debug::fmt(x, f),
+            Self::ReturnStmt(x) => fmt::Debug::fmt(x, f),
+            Self::Item(x) => fmt::Debug::fmt(x, f),
         }
     }
 }
-impl AstNode for Stmt {}
 impl AstElement for Stmt {
     fn can_cast(kind: SyntaxKind) -> bool {
         matches!(
@@ -553,7 +435,7 @@ impl AstElement for Stmt {
         }
             .or_else(|| AstElement::cast(elem.clone()).map(Self::Item))
     }
-    fn span(&self) -> TextRange {
+    fn span(&self) -> Span {
         match self {
             Self::Semicolon(x) => x.span(),
             Self::ExprStmt(x) => x.span(),
@@ -567,26 +449,12 @@ impl AstElement for Stmt {
             Self::Item(x) => x.span(),
         }
     }
-    fn inner(self) -> SyntaxElement {
-        match self {
-            Self::Semicolon(x) => x.inner(),
-            Self::ExprStmt(x) => x.inner(),
-            Self::LetStmt(x) => x.inner(),
-            Self::IfStmt(x) => x.inner(),
-            Self::ForStmt(x) => x.inner(),
-            Self::WhileStmt(x) => x.inner(),
-            Self::BreakStmt(x) => x.inner(),
-            Self::ContinueStmt(x) => x.inner(),
-            Self::ReturnStmt(x) => x.inner(),
-            Self::Item(x) => x.inner(),
-        }
-    }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ExprStmt(SyntaxNode);
-impl std::fmt::Debug for ExprStmt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for ExprStmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for ExprStmt {}
@@ -598,26 +466,20 @@ impl AstElement for ExprStmt {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl ExprStmt {
     pub fn expr(&self) -> Option<Expr> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn semicolon(&self) -> Option<Semicolon> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct LetStmt(SyntaxNode);
-impl std::fmt::Debug for LetStmt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for LetStmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for LetStmt {}
@@ -629,38 +491,23 @@ impl AstElement for LetStmt {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl LetStmt {
-    pub fn let_(&self) -> Option<Let> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn colon(&self) -> Option<Colon> {
-        children(&self.0).nth(0usize)
-    }
     pub fn ty(&self) -> Option<Type> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn equals(&self) -> Option<Equals> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
     pub fn value(&self) -> Option<Expr> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn semicolon(&self) -> Option<Semicolon> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct IfStmt(SyntaxNode);
-impl std::fmt::Debug for IfStmt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for IfStmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for IfStmt {}
@@ -672,35 +519,26 @@ impl AstElement for IfStmt {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl IfStmt {
-    pub fn if_(&self) -> Option<If> {
-        children(&self.0).nth(0usize)
-    }
     pub fn condition(&self) -> Option<Expr> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
     pub fn then_branch(&self) -> Option<Block> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn else_(&self) -> Option<Else> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
     pub fn else_branch(&self) -> Option<ElseStmt> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ForStmt(SyntaxNode);
-impl std::fmt::Debug for ForStmt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for ForStmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for ForStmt {}
@@ -712,35 +550,26 @@ impl AstElement for ForStmt {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl ForStmt {
-    pub fn for_(&self) -> Option<For> {
-        children(&self.0).nth(0usize)
-    }
     pub fn binding(&self) -> Option<Ident> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn in_(&self) -> Option<In> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
     pub fn iterator(&self) -> Option<Expr> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
     pub fn body(&self) -> Option<Block> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct WhileStmt(SyntaxNode);
-impl std::fmt::Debug for WhileStmt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for WhileStmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for WhileStmt {}
@@ -752,29 +581,23 @@ impl AstElement for WhileStmt {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl WhileStmt {
-    pub fn while_(&self) -> Option<While> {
-        children(&self.0).nth(0usize)
-    }
     pub fn condition(&self) -> Option<Expr> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
     pub fn body(&self) -> Option<Block> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct BreakStmt(SyntaxNode);
-impl std::fmt::Debug for BreakStmt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for BreakStmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for BreakStmt {}
@@ -786,26 +609,16 @@ impl AstElement for BreakStmt {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
-impl BreakStmt {
-    pub fn break_(&self) -> Option<Break> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn semicolon(&self) -> Option<Semicolon> {
-        children(&self.0).nth(0usize)
-    }
-}
+impl BreakStmt {}
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ContinueStmt(SyntaxNode);
-impl std::fmt::Debug for ContinueStmt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for ContinueStmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for ContinueStmt {}
@@ -817,26 +630,16 @@ impl AstElement for ContinueStmt {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
-impl ContinueStmt {
-    pub fn continue_(&self) -> Option<Continue> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn semicolon(&self) -> Option<Semicolon> {
-        children(&self.0).nth(0usize)
-    }
-}
+impl ContinueStmt {}
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ReturnStmt(SyntaxNode);
-impl std::fmt::Debug for ReturnStmt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for ReturnStmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for ReturnStmt {}
@@ -848,24 +651,16 @@ impl AstElement for ReturnStmt {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl ReturnStmt {
-    pub fn return_(&self) -> Option<Return> {
-        children(&self.0).nth(0usize)
-    }
     pub fn value(&self) -> Option<Expr> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn semicolon(&self) -> Option<Semicolon> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Expr {
     LiteralExpr(LiteralExpr),
     InfixExpr(InfixExpr),
@@ -876,21 +671,20 @@ pub enum Expr {
     IndexExpr(IndexExpr),
     StructExpr(StructExpr),
 }
-impl std::fmt::Debug for Expr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::LiteralExpr(x) => std::fmt::Debug::fmt(x, f),
-            Self::InfixExpr(x) => std::fmt::Debug::fmt(x, f),
-            Self::PrefixExpr(x) => std::fmt::Debug::fmt(x, f),
-            Self::ParenExpr(x) => std::fmt::Debug::fmt(x, f),
-            Self::CallExpr(x) => std::fmt::Debug::fmt(x, f),
-            Self::ArrayExpr(x) => std::fmt::Debug::fmt(x, f),
-            Self::IndexExpr(x) => std::fmt::Debug::fmt(x, f),
-            Self::StructExpr(x) => std::fmt::Debug::fmt(x, f),
+            Self::LiteralExpr(x) => fmt::Debug::fmt(x, f),
+            Self::InfixExpr(x) => fmt::Debug::fmt(x, f),
+            Self::PrefixExpr(x) => fmt::Debug::fmt(x, f),
+            Self::ParenExpr(x) => fmt::Debug::fmt(x, f),
+            Self::CallExpr(x) => fmt::Debug::fmt(x, f),
+            Self::ArrayExpr(x) => fmt::Debug::fmt(x, f),
+            Self::IndexExpr(x) => fmt::Debug::fmt(x, f),
+            Self::StructExpr(x) => fmt::Debug::fmt(x, f),
         }
     }
 }
-impl AstNode for Expr {}
 impl AstElement for Expr {
     fn can_cast(kind: SyntaxKind) -> bool {
         matches!(
@@ -916,7 +710,7 @@ impl AstElement for Expr {
         }
             .or_else(|| AstElement::cast(elem.clone()).map(Self::LiteralExpr))
     }
-    fn span(&self) -> TextRange {
+    fn span(&self) -> Span {
         match self {
             Self::LiteralExpr(x) => x.span(),
             Self::InfixExpr(x) => x.span(),
@@ -928,32 +722,20 @@ impl AstElement for Expr {
             Self::StructExpr(x) => x.span(),
         }
     }
-    fn inner(self) -> SyntaxElement {
-        match self {
-            Self::LiteralExpr(x) => x.inner(),
-            Self::InfixExpr(x) => x.inner(),
-            Self::PrefixExpr(x) => x.inner(),
-            Self::ParenExpr(x) => x.inner(),
-            Self::CallExpr(x) => x.inner(),
-            Self::ArrayExpr(x) => x.inner(),
-            Self::IndexExpr(x) => x.inner(),
-            Self::StructExpr(x) => x.inner(),
-        }
-    }
 }
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub enum ElseStmt {
     IfStmt(IfStmt),
     Block(Block),
 }
-impl std::fmt::Debug for ElseStmt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for ElseStmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::IfStmt(x) => std::fmt::Debug::fmt(x, f),
-            Self::Block(x) => std::fmt::Debug::fmt(x, f),
+            Self::IfStmt(x) => fmt::Debug::fmt(x, f),
+            Self::Block(x) => fmt::Debug::fmt(x, f),
         }
     }
 }
-impl AstNode for ElseStmt {}
 impl AstElement for ElseStmt {
     fn can_cast(kind: SyntaxKind) -> bool {
         matches!(kind, | SyntaxKind::IfStmt | SyntaxKind::Block)
@@ -965,19 +747,14 @@ impl AstElement for ElseStmt {
             _ => None,
         }
     }
-    fn span(&self) -> TextRange {
+    fn span(&self) -> Span {
         match self {
             Self::IfStmt(x) => x.span(),
             Self::Block(x) => x.span(),
         }
     }
-    fn inner(self) -> SyntaxElement {
-        match self {
-            Self::IfStmt(x) => x.inner(),
-            Self::Block(x) => x.inner(),
-        }
-    }
 }
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub enum LiteralExpr {
     Int(Int),
     Float(Float),
@@ -987,20 +764,19 @@ pub enum LiteralExpr {
     String(String),
     Ident(Ident),
 }
-impl std::fmt::Debug for LiteralExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for LiteralExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Int(x) => std::fmt::Debug::fmt(x, f),
-            Self::Float(x) => std::fmt::Debug::fmt(x, f),
-            Self::True(x) => std::fmt::Debug::fmt(x, f),
-            Self::False(x) => std::fmt::Debug::fmt(x, f),
-            Self::Char(x) => std::fmt::Debug::fmt(x, f),
-            Self::String(x) => std::fmt::Debug::fmt(x, f),
-            Self::Ident(x) => std::fmt::Debug::fmt(x, f),
+            Self::Int(x) => fmt::Debug::fmt(x, f),
+            Self::Float(x) => fmt::Debug::fmt(x, f),
+            Self::True(x) => fmt::Debug::fmt(x, f),
+            Self::False(x) => fmt::Debug::fmt(x, f),
+            Self::Char(x) => fmt::Debug::fmt(x, f),
+            Self::String(x) => fmt::Debug::fmt(x, f),
+            Self::Ident(x) => fmt::Debug::fmt(x, f),
         }
     }
 }
-impl AstNode for LiteralExpr {}
 impl AstElement for LiteralExpr {
     fn can_cast(kind: SyntaxKind) -> bool {
         matches!(
@@ -1020,7 +796,7 @@ impl AstElement for LiteralExpr {
             _ => None,
         }
     }
-    fn span(&self) -> TextRange {
+    fn span(&self) -> Span {
         match self {
             Self::Int(x) => x.span(),
             Self::Float(x) => x.span(),
@@ -1031,23 +807,12 @@ impl AstElement for LiteralExpr {
             Self::Ident(x) => x.span(),
         }
     }
-    fn inner(self) -> SyntaxElement {
-        match self {
-            Self::Int(x) => x.inner(),
-            Self::Float(x) => x.inner(),
-            Self::True(x) => x.inner(),
-            Self::False(x) => x.inner(),
-            Self::Char(x) => x.inner(),
-            Self::String(x) => x.inner(),
-            Self::Ident(x) => x.inner(),
-        }
-    }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct InfixExpr(SyntaxNode);
-impl std::fmt::Debug for InfixExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for InfixExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for InfixExpr {}
@@ -1059,19 +824,16 @@ impl AstElement for InfixExpr {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl InfixExpr {
     pub fn lhs(&self) -> Option<Expr> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
     pub fn op(&self) -> Option<InfixOp> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
     pub fn rhs(&self) -> Option<Expr> {
         children(&self.0).nth(1usize)
@@ -1079,9 +841,9 @@ impl InfixExpr {
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct PrefixExpr(SyntaxNode);
-impl std::fmt::Debug for PrefixExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for PrefixExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for PrefixExpr {}
@@ -1093,26 +855,23 @@ impl AstElement for PrefixExpr {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl PrefixExpr {
     pub fn op(&self) -> Option<PrefixOp> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
     pub fn child(&self) -> Option<Expr> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ParenExpr(SyntaxNode);
-impl std::fmt::Debug for ParenExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for ParenExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for ParenExpr {}
@@ -1124,29 +883,20 @@ impl AstElement for ParenExpr {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl ParenExpr {
-    pub fn left_paren(&self) -> Option<LeftParen> {
-        children(&self.0).nth(0usize)
-    }
     pub fn child(&self) -> Option<Expr> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn right_paren(&self) -> Option<RightParen> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CallExpr(SyntaxNode);
-impl std::fmt::Debug for CallExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for CallExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for CallExpr {}
@@ -1158,29 +908,20 @@ impl AstElement for CallExpr {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl CallExpr {
     pub fn child(&self) -> Option<Expr> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn left_paren(&self) -> Option<LeftParen> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn right_paren(&self) -> Option<RightParen> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ArrayExpr(SyntaxNode);
-impl std::fmt::Debug for ArrayExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for ArrayExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for ArrayExpr {}
@@ -1192,26 +933,16 @@ impl AstElement for ArrayExpr {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
-impl ArrayExpr {
-    pub fn left_bracket(&self) -> Option<LeftBracket> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn right_bracket(&self) -> Option<RightBracket> {
-        children(&self.0).nth(0usize)
-    }
-}
+impl ArrayExpr {}
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct IndexExpr(SyntaxNode);
-impl std::fmt::Debug for IndexExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for IndexExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for IndexExpr {}
@@ -1223,32 +954,23 @@ impl AstElement for IndexExpr {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl IndexExpr {
     pub fn array(&self) -> Option<Expr> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn left_bracket(&self) -> Option<LeftBracket> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
     pub fn index(&self) -> Option<Expr> {
         children(&self.0).nth(1usize)
     }
-    pub fn right_bracket(&self) -> Option<RightBracket> {
-        children(&self.0).nth(0usize)
-    }
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct StructExpr(SyntaxNode);
-impl std::fmt::Debug for StructExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+impl fmt::Debug for StructExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 impl AstNode for StructExpr {}
@@ -1260,24 +982,16 @@ impl AstElement for StructExpr {
         let node = elem.into_node()?;
         Self::can_cast(node.kind()).then(|| Self(node))
     }
-    fn span(&self) -> TextRange {
-        self.0.text_range()
-    }
-    fn inner(self) -> SyntaxElement {
-        self.0.into()
+    fn span(&self) -> Span {
+        self.0.text_range().into()
     }
 }
 impl StructExpr {
     pub fn name(&self) -> Option<Ident> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn left_brace(&self) -> Option<LeftBrace> {
-        children(&self.0).nth(0usize)
-    }
-    pub fn right_brace(&self) -> Option<RightBrace> {
-        children(&self.0).nth(0usize)
+        children(&self.0).next()
     }
 }
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub enum InfixOp {
     Plus(Plus),
     Minus(Minus),
@@ -1299,32 +1013,31 @@ pub enum InfixOp {
     SlashEquals(SlashEquals),
     PercentEquals(PercentEquals),
 }
-impl std::fmt::Debug for InfixOp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for InfixOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Plus(x) => std::fmt::Debug::fmt(x, f),
-            Self::Minus(x) => std::fmt::Debug::fmt(x, f),
-            Self::Star(x) => std::fmt::Debug::fmt(x, f),
-            Self::Slash(x) => std::fmt::Debug::fmt(x, f),
-            Self::Percent(x) => std::fmt::Debug::fmt(x, f),
-            Self::Eq(x) => std::fmt::Debug::fmt(x, f),
-            Self::Neq(x) => std::fmt::Debug::fmt(x, f),
-            Self::Lt(x) => std::fmt::Debug::fmt(x, f),
-            Self::Le(x) => std::fmt::Debug::fmt(x, f),
-            Self::Gt(x) => std::fmt::Debug::fmt(x, f),
-            Self::Ge(x) => std::fmt::Debug::fmt(x, f),
-            Self::And(x) => std::fmt::Debug::fmt(x, f),
-            Self::Or(x) => std::fmt::Debug::fmt(x, f),
-            Self::Equals(x) => std::fmt::Debug::fmt(x, f),
-            Self::PlusEquals(x) => std::fmt::Debug::fmt(x, f),
-            Self::MinusEquals(x) => std::fmt::Debug::fmt(x, f),
-            Self::StarEquals(x) => std::fmt::Debug::fmt(x, f),
-            Self::SlashEquals(x) => std::fmt::Debug::fmt(x, f),
-            Self::PercentEquals(x) => std::fmt::Debug::fmt(x, f),
+            Self::Plus(x) => fmt::Debug::fmt(x, f),
+            Self::Minus(x) => fmt::Debug::fmt(x, f),
+            Self::Star(x) => fmt::Debug::fmt(x, f),
+            Self::Slash(x) => fmt::Debug::fmt(x, f),
+            Self::Percent(x) => fmt::Debug::fmt(x, f),
+            Self::Eq(x) => fmt::Debug::fmt(x, f),
+            Self::Neq(x) => fmt::Debug::fmt(x, f),
+            Self::Lt(x) => fmt::Debug::fmt(x, f),
+            Self::Le(x) => fmt::Debug::fmt(x, f),
+            Self::Gt(x) => fmt::Debug::fmt(x, f),
+            Self::Ge(x) => fmt::Debug::fmt(x, f),
+            Self::And(x) => fmt::Debug::fmt(x, f),
+            Self::Or(x) => fmt::Debug::fmt(x, f),
+            Self::Equals(x) => fmt::Debug::fmt(x, f),
+            Self::PlusEquals(x) => fmt::Debug::fmt(x, f),
+            Self::MinusEquals(x) => fmt::Debug::fmt(x, f),
+            Self::StarEquals(x) => fmt::Debug::fmt(x, f),
+            Self::SlashEquals(x) => fmt::Debug::fmt(x, f),
+            Self::PercentEquals(x) => fmt::Debug::fmt(x, f),
         }
     }
 }
-impl AstNode for InfixOp {}
 impl AstElement for InfixOp {
     fn can_cast(kind: SyntaxKind) -> bool {
         matches!(
@@ -1370,7 +1083,7 @@ impl AstElement for InfixOp {
             _ => None,
         }
     }
-    fn span(&self) -> TextRange {
+    fn span(&self) -> Span {
         match self {
             Self::Plus(x) => x.span(),
             Self::Minus(x) => x.span(),
@@ -1393,30 +1106,8 @@ impl AstElement for InfixOp {
             Self::PercentEquals(x) => x.span(),
         }
     }
-    fn inner(self) -> SyntaxElement {
-        match self {
-            Self::Plus(x) => x.inner(),
-            Self::Minus(x) => x.inner(),
-            Self::Star(x) => x.inner(),
-            Self::Slash(x) => x.inner(),
-            Self::Percent(x) => x.inner(),
-            Self::Eq(x) => x.inner(),
-            Self::Neq(x) => x.inner(),
-            Self::Lt(x) => x.inner(),
-            Self::Le(x) => x.inner(),
-            Self::Gt(x) => x.inner(),
-            Self::Ge(x) => x.inner(),
-            Self::And(x) => x.inner(),
-            Self::Or(x) => x.inner(),
-            Self::Equals(x) => x.inner(),
-            Self::PlusEquals(x) => x.inner(),
-            Self::MinusEquals(x) => x.inner(),
-            Self::StarEquals(x) => x.inner(),
-            Self::SlashEquals(x) => x.inner(),
-            Self::PercentEquals(x) => x.inner(),
-        }
-    }
 }
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub enum PrefixOp {
     Plus(Plus),
     Minus(Minus),
@@ -1424,18 +1115,17 @@ pub enum PrefixOp {
     Ampersand(Ampersand),
     Star(Star),
 }
-impl std::fmt::Debug for PrefixOp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for PrefixOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Plus(x) => std::fmt::Debug::fmt(x, f),
-            Self::Minus(x) => std::fmt::Debug::fmt(x, f),
-            Self::Not(x) => std::fmt::Debug::fmt(x, f),
-            Self::Ampersand(x) => std::fmt::Debug::fmt(x, f),
-            Self::Star(x) => std::fmt::Debug::fmt(x, f),
+            Self::Plus(x) => fmt::Debug::fmt(x, f),
+            Self::Minus(x) => fmt::Debug::fmt(x, f),
+            Self::Not(x) => fmt::Debug::fmt(x, f),
+            Self::Ampersand(x) => fmt::Debug::fmt(x, f),
+            Self::Star(x) => fmt::Debug::fmt(x, f),
         }
     }
 }
-impl AstNode for PrefixOp {}
 impl AstElement for PrefixOp {
     fn can_cast(kind: SyntaxKind) -> bool {
         matches!(
@@ -1453,22 +1143,13 @@ impl AstElement for PrefixOp {
             _ => None,
         }
     }
-    fn span(&self) -> TextRange {
+    fn span(&self) -> Span {
         match self {
             Self::Plus(x) => x.span(),
             Self::Minus(x) => x.span(),
             Self::Not(x) => x.span(),
             Self::Ampersand(x) => x.span(),
             Self::Star(x) => x.span(),
-        }
-    }
-    fn inner(self) -> SyntaxElement {
-        match self {
-            Self::Plus(x) => x.inner(),
-            Self::Minus(x) => x.inner(),
-            Self::Not(x) => x.inner(),
-            Self::Ampersand(x) => x.inner(),
-            Self::Star(x) => x.inner(),
         }
     }
 }

@@ -3,30 +3,25 @@ Program = Item*
 Item = 
   StructDef
 | EnumDef
-| Function
+| FunctionDef
 
-StructDef = 'struct' name:'ident' body:StructBody
+StructDef = 'struct' name:'ident' body:Record
 
-StructBody =  '{' fields:( field:Param ','? )* '}'
+Record = '{' ( Param ','? )* '}'
 
-EnumDef = 'enum' name:'ident' '{' variants:( variant:( name:'ident' body:StructBody? ) ','? )* '}'
+EnumDef = 'enum' name:'ident' '{' ( ( variant:'ident' body:Record? ) ','? )* '}'
 
-Function = 'fn' name:'ident' '(' params:( Param ','? )* ')' ( ':' return_ty:Type )? body:Block
+FunctionDef = 'fn' name:'ident' '(' ( Param ','? )* ')' ( '->' return_ty:Type )? body:Block
 
 Param = name:'ident' ':' ty:Type
 
 Type =
-  'int_type'
-| 'float_type'
-| 'bool_type'
-| 'char_type'
-| 'string_type'
-| FunctionType
+  FunctionType
 | ArrayType
 | PtrType
 | CustomType
 
-FunctionType = 'fn' '(' params:( Param ','? )* ')'
+FunctionType = 'fn' '(' ( ty:Type ','? )* ')' ( '->' return_ty:Type )?
 
 ArrayType = '[' ty:Type ']'
 

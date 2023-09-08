@@ -158,7 +158,7 @@ fn struct_def(p: &mut Parser<'_>) {
 }
 
 fn struct_body(p: &mut Parser<'_>) {
-    p.start_node(StructBody);
+    p.start_node(Record);
     p.expect(LeftBrace);
     comma_separated(p, RightBrace, param);
     p.expect(RightBrace);
@@ -185,7 +185,7 @@ fn enum_def(p: &mut Parser<'_>) {
 }
 
 fn function(p: &mut Parser<'_>) {
-    p.start_node(Function);
+    p.start_node(FunctionDef);
 
     p.expect(Fn);
     p.expect(Ident);
@@ -212,9 +212,6 @@ fn param(p: &mut Parser<'_>) {
 
 fn ty(p: &mut Parser<'_>) {
     match p.peek() {
-        IntType | FloatType | BoolType | CharType | StringType => {
-            p.next();
-        }
         Fn => {
             p.start_node(FunctionType);
             p.next();
